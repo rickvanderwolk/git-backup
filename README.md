@@ -5,10 +5,10 @@ Simple Bash script to backup GitHub repositories to USB drives. Designed to run 
 ## Features
 
 - Backs up all public GitHub repositories
-- Uses `git clone --mirror` for complete repository copies
-- Incremental updates (only fetches new commits on subsequent runs)
+- Creates both mirror (git database) and working copy (browsable files)
+- Processes repositories one-by-one to minimize temporary storage usage
 - Syncs to multiple USB drives automatically
-- Temporary local storage during backup, then cleaned up
+- Temporary local storage during backup, then cleaned up per repo
 - Simple configuration via `config.env`
 
 ## Requirements
@@ -41,7 +41,8 @@ nano config.env
 
 3. Edit `config.env`:
    - Set `GITHUB_USER` to your GitHub username
-   - Set `BACKUP_TARGETS` to your USB mount points (space-separated)
+   - Set `BACKUP_TARGETS` to your USB mount points (e.g., `/mnt/usb1 /mnt/usb2`)
+   - Script will create a `git-backup/` subdirectory in each target
    - Optionally set `GITHUB_TOKEN` for private repos and higher rate limits
 
 4. Mount your USB drive(s):
@@ -66,11 +67,14 @@ Run the backup script:
 ./backup.sh
 ```
 
-The script will:
+The script will process each repository one-by-one:
 1. Fetch list of your public repositories
-2. Clone/update each repository to `/tmp/git-backup/`
-3. Sync to all mounted USB drives specified in `BACKUP_TARGETS`
-4. Clean up temporary directory
+2. For each repo:
+   - Clone mirror (bare repository) to `/tmp/git-backup/repo.git/`
+   - Clone working copy (with files) to `/tmp/git-backup/repo/`
+   - Sync both to all mounted USB drives
+   - Clean up that repo from `/tmp/`
+3. Repeat for next repository
 
 ## Automated Backups with Cron
 
@@ -96,22 +100,43 @@ Add one of these lines:
 
 After running, your USB drives will contain:
 ```
-/mnt/usb1/git-backup/
-├── repo1.git/
-├── repo2.git/
-└── repo3.git/
+/mnt/usb1/
+└── git-backup/
+    ├── repo1/              # Working copy (browsable files)
+    │   ├── README.md
+    │   ├── src/
+    │   └── ...
+    ├── repo1.git/          # Bare mirror (git database)
+    │   ├── HEAD
+    │   ├── refs/
+    │   └── objects/
+    ├── repo2/
+    ├── repo2.git/
+    └── ...
 ```
 
-Each `.git` directory is a complete mirror that can be updated incrementally.
+- **Working copy** (`repo/`): Browse files, read code directly
+- **Bare mirror** (`repo.git/`): Complete git database for restoring
 
 ## Restoring a Repository
 
-To restore a repository from backup:
+### Option 1: Copy working files directly
 ```bash
-# Clone from backup
-git clone /mnt/usb1/git-backup/repo-name.git
+# Simply copy the folder
+cp -r /mnt/usb1/git-backup/repo-name ~/restored-repo
+cd ~/restored-repo
+# All files are there, including .git folder
+```
 
-# Or push to a new remote
+### Option 2: Clone from mirror
+```bash
+# Clone from bare mirror
+git clone /mnt/usb1/git-backup/repo-name.git ~/restored-repo
+```
+
+### Option 3: Push to new GitHub repo
+```bash
+# Push mirror to new remote
 cd /mnt/usb1/git-backup/repo-name.git
 git push --mirror https://github.com/username/new-repo.git
 ```

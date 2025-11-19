@@ -64,38 +64,49 @@ fetch_repositories() {
     fi
 }
 
-# Clone or update a repository
+# Clone or update a repository (both mirror and working copy)
 backup_repository() {
     local repo_url="$1"
     local repo_name=$(basename "$repo_url" .git)
-    local repo_path="${TMP_DIR}/${repo_name}.git"
+    local mirror_path="${TMP_DIR}/${repo_name}.git"
+    local working_path="${TMP_DIR}/${repo_name}"
 
-    if [ -d "$repo_path" ]; then
-        log "Updating: $repo_name"
-        git -C "$repo_path" remote update --prune
-    else
-        log "Cloning: $repo_name"
-        git clone --mirror "$repo_url" "$repo_path"
-    fi
+    log "Processing: $repo_name"
+
+    # Clone mirror (bare repository)
+    log "  → Cloning mirror"
+    git clone --mirror "$repo_url" "$mirror_path" 2>&1 | sed 's/^/    /' >&2
+
+    # Clone working copy (with files)
+    log "  → Cloning working copy"
+    git clone "$repo_url" "$working_path" 2>&1 | sed 's/^/    /' >&2
 }
 
-# Sync to USB targets
-sync_to_targets() {
-    log "Syncing to backup targets..."
+# Sync single repository to USB targets
+sync_repo_to_targets() {
+    local repo_name="$1"
 
     for target in $BACKUP_TARGETS; do
         if [ -d "$target" ]; then
             log "  → Syncing to: $target"
-            mkdir -p "$target"
-            rsync -av --delete "$TMP_DIR/" "$target/"
+            mkdir -p "$target/git-backup"
+            rsync -a "$TMP_DIR/${repo_name}.git/" "$target/git-backup/${repo_name}.git/"
+            rsync -a "$TMP_DIR/${repo_name}/" "$target/git-backup/${repo_name}/"
         else
             log "  ⚠ Skipping (not mounted): $target"
         fi
     done
 }
 
+# Cleanup single repository from temp
+cleanup_repo() {
+    local repo_name="$1"
+    log "  → Cleaning up temp files"
+    rm -rf "$TMP_DIR/${repo_name}.git" "$TMP_DIR/${repo_name}"
+}
+
 # Cleanup temporary directory
-cleanup() {
+cleanup_all() {
     if [ -d "$TMP_DIR" ]; then
         log "Cleaning up temporary directory"
         rm -rf "$TMP_DIR"
@@ -112,30 +123,49 @@ main() {
     # Create temporary directory
     mkdir -p "$TMP_DIR"
 
-    # Fetch and backup repositories
+    # Fetch repository list
     repos=$(fetch_repositories)
 
     if [ -z "$repos" ]; then
         log "No repositories found for user: $GITHUB_USER"
-        cleanup
+        cleanup_all
         exit 1
     fi
 
     local repo_count=$(echo "$repos" | wc -l)
     log "Found $repo_count repositories"
+    log ""
 
-    # Backup each repository
+    # Process each repository one by one
+    local current=0
     while IFS= read -r repo_url; do
+        current=$((current + 1))
+        local repo_name=$(basename "$repo_url" .git)
+
+        log "[$current/$repo_count] $repo_name"
+
+        # Clone both mirror and working copy
         backup_repository "$repo_url"
+
+        # Sync to USB targets
+        sync_repo_to_targets "$repo_name"
+
+        # Cleanup this repo from temp
+        cleanup_repo "$repo_name"
+
+        log ""
     done <<< "$repos"
 
-    # Sync to USB targets
-    sync_to_targets
-
-    # Cleanup
-    cleanup
+    # Final cleanup
+    cleanup_all
 
     log "=== GitHub Backup Completed ==="
+    log "Backed up $repo_count repositories to:"
+    for target in $BACKUP_TARGETS; do
+        if [ -d "$target" ]; then
+            log "  - $target/git-backup/"
+        fi
+    done
 }
 
 # Run main function
