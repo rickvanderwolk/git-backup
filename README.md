@@ -160,7 +160,3 @@ git push --mirror https://github.com/username/new-repo.git
 **Rate limit errors**
 - Without token: 60 requests/hour
 - Add `GITHUB_TOKEN` in config for 5000 requests/hour
-
-## License
-
-MIT
