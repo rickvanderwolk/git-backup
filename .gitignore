@@ -1,0 +1,8 @@
+# Configuration file (may contain GitHub token)
+config.env
+
+# Log files
+*.log
+
+# Temporary files
+tmp/
