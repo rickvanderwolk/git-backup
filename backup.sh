@@ -27,7 +27,7 @@ TMP_DIR="${TMP_DIR:-/tmp/git-backup}"
 
 # Logging function
 log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >&2
 }
 
 # Check dependencies
