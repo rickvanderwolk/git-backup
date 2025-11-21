@@ -112,13 +112,27 @@ backup_repository() {
     # Clone or fetch repository
     if [ -d "$mirror_path" ]; then
         log "  → Fetching updates"
-        if ! git -C "$mirror_path" fetch --all --prune 2>&1 | sed 's/^/    /' >&2; then
+        local git_output
+        git_output=$(git -C "$mirror_path" fetch --all --prune 2>&1)
+        local git_status=$?
+        echo "$git_output" | sed 's/^/    /' >&2
+        if [ $git_status -ne 0 ]; then
             log "  ✗ ERROR: Git fetch failed for $repo_name"
             return 2
         fi
     else
         log "  → Cloning mirror (first time)"
-        if ! git clone --mirror "$repo_url" "$mirror_path" 2>&1 | sed 's/^/    /' >&2; then
+        # Ensure parent directory exists
+        local parent_dir=$(dirname "$mirror_path")
+        if ! mkdir -p "$parent_dir" 2>/dev/null; then
+            log "  ✗ ERROR: Cannot create directory $parent_dir (permission denied)"
+            return 2
+        fi
+        local git_output
+        git_output=$(git clone --mirror "$repo_url" "$mirror_path" 2>&1)
+        local git_status=$?
+        echo "$git_output" | sed 's/^/    /' >&2
+        if [ $git_status -ne 0 ]; then
             log "  ✗ ERROR: Git clone failed for $repo_name"
             return 2
         fi
@@ -159,36 +173,57 @@ sync_repo_to_targets() {
         fi
 
         log "  → Syncing to: $target"
-        mkdir -p "$target/git-backup/mirrors"
+
+        # Create target directories with error checking
+        if ! mkdir -p "$target/git-backup/mirrors" 2>/dev/null; then
+            log "    ✗ ERROR: Cannot create directory (permission denied)"
+            continue
+        fi
 
         # Sync mirror (always)
-        if rsync -a --delete "$mirror_path/" "$target/git-backup/mirrors/${repo_name}.git/" 2>&1 | sed 's/^/    /' >&2; then
-            log "    ✓ Mirror synced to $target"
-            sync_success=1
-        else
+        local rsync_output
+        rsync_output=$(rsync -a --delete "$mirror_path/" "$target/git-backup/mirrors/${repo_name}.git/" 2>&1)
+        local rsync_status=$?
+        if [ $rsync_status -ne 0 ]; then
+            echo "$rsync_output" | sed 's/^/    /' >&2
             log "    ✗ ERROR: Mirror sync failed to $target"
             continue
         fi
+        log "    ✓ Mirror synced to $target"
+        sync_success=1
 
         # Sync working copy (optional)
         if [ "$CREATE_WORKING_COPY" == "true" ]; then
             local working_path="${TMP_DIR}/${repo_name}"
-            mkdir -p "$target/git-backup/checkouts"
+
+            # Create target directory with error checking
+            if ! mkdir -p "$target/git-backup/checkouts" 2>/dev/null; then
+                log "    ✗ ERROR: Cannot create checkouts directory (permission denied)"
+                continue
+            fi
 
             # Create working copy if it doesn't exist
             if [ ! -d "$working_path" ]; then
                 log "    → Creating working copy"
-                if ! git clone "$mirror_path" "$working_path" 2>&1 | sed 's/^/      /' >&2; then
+                local git_output
+                git_output=$(git clone "$mirror_path" "$working_path" 2>&1)
+                local git_status=$?
+                echo "$git_output" | sed 's/^/      /' >&2
+                if [ $git_status -ne 0 ]; then
                     log "    ✗ ERROR: Failed to create working copy"
                     continue
                 fi
             fi
 
             # Sync working copy
-            if rsync -a --delete "$working_path/" "$target/git-backup/checkouts/${repo_name}/" 2>&1 | sed 's/^/    /' >&2; then
-                log "    ✓ Working copy synced to $target"
-            else
+            local rsync_output
+            rsync_output=$(rsync -a --delete "$working_path/" "$target/git-backup/checkouts/${repo_name}/" 2>&1)
+            local rsync_status=$?
+            if [ $rsync_status -ne 0 ]; then
+                echo "$rsync_output" | sed 's/^/    /' >&2
                 log "    ✗ ERROR: Working copy sync failed to $target"
+            else
+                log "    ✓ Working copy synced to $target"
             fi
         fi
     done
@@ -226,9 +261,19 @@ main() {
     # Check dependencies
     check_dependencies
 
-    # Create master backup directory and temporary directory
-    mkdir -p "$MASTER_BACKUP_DIR"
-    mkdir -p "$TMP_DIR"
+    # Create master backup directory and temporary directory with error checking
+    if ! mkdir -p "$MASTER_BACKUP_DIR" 2>/dev/null; then
+        log "ERROR: Cannot create master backup directory: $MASTER_BACKUP_DIR"
+        log "Check permissions or run: sudo mkdir -p $MASTER_BACKUP_DIR && sudo chown \$(whoami):\$(whoami) $MASTER_BACKUP_DIR"
+        release_lock
+        exit 1
+    fi
+
+    if ! mkdir -p "$TMP_DIR" 2>/dev/null; then
+        log "ERROR: Cannot create temporary directory: $TMP_DIR"
+        release_lock
+        exit 1
+    fi
 
     # Fetch repository list
     repos=$(fetch_repositories)
