@@ -91,23 +91,13 @@ fetch_repositories() {
 }
 
 # Clone or update a repository in master backup directory
-# Returns: 0 if changes detected, 1 if no changes, 2 if error
+# Returns: 0 if success, 1 if error
 backup_repository() {
     local repo_url="$1"
     local repo_name=$(basename "$repo_url" .git)
     local mirror_path="${MASTER_BACKUP_DIR}/${repo_name}.git"
 
     log "Processing: $repo_name"
-
-    # Get hash before update (for change detection)
-    local hash_before="new_repo"
-    if [ -d "$mirror_path" ]; then
-        hash_before=$(git -C "$mirror_path" rev-parse --all 2>/dev/null | sha256sum | cut -d' ' -f1)
-        if [ $? -ne 0 ]; then
-            log "  ⚠ Warning: Could not get git hash, will treat as changed"
-            hash_before="error"
-        fi
-    fi
 
     # Clone or fetch repository
     if [ -d "$mirror_path" ]; then
@@ -118,7 +108,7 @@ backup_repository() {
         echo "$git_output" | sed 's/^/    /' >&2
         if [ $git_status -ne 0 ]; then
             log "  ✗ ERROR: Git fetch failed for $repo_name"
-            return 2
+            return 1
         fi
     else
         log "  → Cloning mirror (first time)"
@@ -126,7 +116,7 @@ backup_repository() {
         local parent_dir=$(dirname "$mirror_path")
         if ! mkdir -p "$parent_dir" 2>/dev/null; then
             log "  ✗ ERROR: Cannot create directory $parent_dir (permission denied)"
-            return 2
+            return 1
         fi
         local git_output
         git_output=$(git clone --mirror "$repo_url" "$mirror_path" 2>&1)
@@ -134,29 +124,12 @@ backup_repository() {
         echo "$git_output" | sed 's/^/    /' >&2
         if [ $git_status -ne 0 ]; then
             log "  ✗ ERROR: Git clone failed for $repo_name"
-            return 2
+            return 1
         fi
+        log "  ✓ New repository cloned"
     fi
 
-    # Get hash after update
-    local hash_after=$(git -C "$mirror_path" rev-parse --all 2>/dev/null | sha256sum | cut -d' ' -f1)
-    if [ $? -ne 0 ]; then
-        log "  ⚠ Warning: Could not verify git hash after update"
-        hash_after="error"
-    fi
-
-    # Detect if changes occurred
-    if [ "$hash_before" == "$hash_after" ] && [ "$hash_before" != "error" ]; then
-        log "  ✓ No changes detected, skipping sync"
-        return 1
-    else
-        if [ "$hash_before" == "new_repo" ]; then
-            log "  ✓ New repository cloned"
-        else
-            log "  ✓ Changes detected, will sync"
-        fi
-        return 0
-    fi
+    return 0
 }
 
 # Sync single repository to USB targets (sequentially)
@@ -294,7 +267,6 @@ main() {
     # Process each repository one by one with error handling
     local current=0
     local success_count=0
-    local skipped_count=0
     local failed_count=0
 
     while IFS= read -r repo_url; do
@@ -304,24 +276,20 @@ main() {
         log "[$current/$repo_count] $repo_name"
 
         # Backup repository (fetch/clone)
-        backup_repository "$repo_url"
-        local backup_status=$?
-
-        if [ $backup_status -eq 2 ]; then
-            # Error occurred
+        if ! backup_repository "$repo_url"; then
+            # Error occurred during fetch/clone
             log "  ✗ Skipping sync due to backup error"
             failed_count=$((failed_count + 1))
-        elif [ $backup_status -eq 1 ]; then
-            # No changes detected
-            skipped_count=$((skipped_count + 1))
+            log ""
+            continue
+        fi
+
+        # Always sync to USB (rsync detects changes automatically)
+        if sync_repo_to_targets "$repo_name"; then
+            success_count=$((success_count + 1))
         else
-            # Changes detected, sync to USB
-            if sync_repo_to_targets "$repo_name"; then
-                success_count=$((success_count + 1))
-            else
-                log "  ⚠ Warning: Sync failed to all targets"
-                failed_count=$((failed_count + 1))
-            fi
+            log "  ⚠ Warning: Sync failed to all targets"
+            failed_count=$((failed_count + 1))
         fi
 
         # Cleanup temporary files
@@ -339,8 +307,7 @@ main() {
     log "=== GitHub Backup Completed ==="
     log "Statistics:"
     log "  - Total repositories: $repo_count"
-    log "  - Synced (with changes): $success_count"
-    log "  - Skipped (no changes): $skipped_count"
+    log "  - Successfully synced: $success_count"
     log "  - Failed: $failed_count"
     log ""
     log "Master backup location: $MASTER_BACKUP_DIR"

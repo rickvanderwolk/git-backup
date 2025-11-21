@@ -5,8 +5,9 @@ Simple Bash script to backup GitHub repositories to USB drives. Designed to run 
 ## Features
 
 - **Incremental backups**: Only fetches new commits instead of re-cloning entire repos
-- **Smart skip logic**: Automatically skips repos without changes (saves time and bandwidth)
+- **Smart rsync**: Automatically detects and syncs only changed files (efficient and reliable)
 - **Master backup on Pi**: Persistent storage for faster updates, USB drives are replicas
+- **Automatic catch-up**: New or disconnected USB drives automatically receive all repos
 - **Dual backup format**: Mirror (git database) + optional working copy (browsable files)
 - **Robust error handling**: Continues backing up other repos if one fails
 - **Lock mechanism**: Prevents concurrent runs from conflicting
@@ -86,10 +87,11 @@ The script uses incremental backups for efficiency:
 1. Fetch list of repositories
 2. For each repo:
    - Fetch new commits into existing master backup (only downloads changes)
-   - Compare git hashes: if unchanged, skip entirely ⚡
-   - If changed, sync updated mirror to USB drives
+   - Sync to all mounted USB drives (rsync efficiently detects and transfers only changes)
    - Clean up temporary files
 3. Master backup remains on Pi, continuously updated
+
+**Note:** rsync automatically handles change detection - if a repo hasn't changed, rsync skips it in milliseconds. If a USB drive is new or was disconnected, it automatically receives all missing repos.
 
 ## Automated Backups with Cron
 
@@ -177,23 +179,28 @@ git push --mirror https://github.com/username/new-repo.git
 
 ## Performance
 
-The incremental backup system significantly reduces backup time and bandwidth:
+The incremental backup system with smart rsync significantly reduces backup time and bandwidth:
 
 **Example scenario: 50 repositories, 5 receive updates**
 
 | Metric | First Run | Subsequent Runs |
 |--------|-----------|-----------------|
 | Repos cloned | 50 | 0 |
-| Repos fetched | 0 | 50 |
-| Repos skipped | 0 | 45 (no changes) |
-| Repos synced | 50 | 5 (only changed) |
+| Repos fetched | 0 | 50 (fast, only checks) |
+| Rsync operations | 50 (full copy) | 50 (auto-detects changes) |
 | Time | ~30 minutes | ~5 minutes |
 | Bandwidth | Full repo size | Only new commits |
+
+**How rsync makes it efficient:**
+- Unchanged repos: rsync checks and skips in ~0.1 seconds per repo
+- Changed repos: rsync transfers only the deltas (git objects that changed)
+- New/disconnected USB: rsync automatically copies missing repos
 
 **Benefits:**
 - ✅ 80-90% faster on subsequent runs
 - ✅ Minimal bandwidth usage (only deltas)
 - ✅ Safe: errors in one repo don't stop others
+- ✅ Automatic catch-up for new or disconnected USB drives
 - ✅ Persistent master backup survives crashes/reboots
 - ✅ Lock prevents multiple runs from conflicting
 
